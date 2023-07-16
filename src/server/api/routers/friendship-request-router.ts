@@ -1,3 +1,4 @@
+import { Friendship } from './../../db/types';
 import { TRPCError } from '@trpc/server'
 import { z } from 'zod'
 
@@ -79,14 +80,33 @@ export const friendshipRequestRouter = router({
        * scenario for Question 3
        *  - Run `yarn test` to verify your answer
        */
-      return ctx.db
-        .insertInto('friendships')
-        .values({
-          userId: ctx.session.userId,
-          friendUserId: input.friendUserId,
-          status: FriendshipStatusSchema.Values['requested'],
-        })
-        .execute()
+      const haveResult = await ctx.db
+            .selectFrom('friendships')
+            .where('friendships.userId', '=', ctx.session.userId)
+            .where('friendships.friendUserId', '=', input.friendUserId)
+            .select('friendships.id')
+            .limit(1)
+            .executeTakeFirst()
+
+      if(typeof haveResult !== "undefined"){
+        return await ctx.db
+        .updateTable('friendships')
+        .where('friendships.userId', '=', ctx.session.userId)
+        .where('friendships.friendUserId', '=', input.friendUserId)
+        .set({status: FriendshipStatusSchema.Values['requested']})
+        .executeTakeFirst()
+      }
+      else
+      {
+        return ctx.db
+          .insertInto('friendships')
+          .values({
+            userId: ctx.session.userId,
+            friendUserId: input.friendUserId,
+            status: FriendshipStatusSchema.Values['requested'],
+          })
+          .execute()
+      }
     }),
 
   accept: procedure
@@ -94,6 +114,7 @@ export const friendshipRequestRouter = router({
     .input(AnswerFriendshipRequestInputSchema)
     .mutation(async ({ ctx, input }) => {
       await ctx.db.transaction().execute(async (t) => {
+        
         /**
          * Question 1: Implement api to accept a friendship request
          *
@@ -117,6 +138,63 @@ export const friendshipRequestRouter = router({
          *  - https://kysely-org.github.io/kysely/classes/Kysely.html#insertInto
          *  - https://kysely-org.github.io/kysely/classes/Kysely.html#updateTable
          */
+
+          //Update the friendship request to have status `accepted`
+          await t
+          .updateTable('friendships')
+          .where('friendships.userId', '=', input.friendUserId)
+          .where('friendships.friendUserId', '=', ctx.session.userId)
+          .where(
+            'friendships.status',
+            '=',
+            FriendshipStatusSchema.Values['requested']
+            )
+          .set({status: FriendshipStatusSchema.Values['accepted']})
+          .executeTakeFirst()
+          try {
+            //Find whether record with the opposite user as the friend is already created
+            const haveResult = await t
+            .selectFrom('friendships')
+            .where('friendships.userId', '=', ctx.session.userId)
+            .where('friendships.friendUserId', '=', input.friendUserId)
+            .where(
+              'friendships.status',
+              '=',
+              FriendshipStatusSchema.Values['requested']
+            )
+            .select('friendships.id')
+            .limit(1)
+            .executeTakeFirst()
+            
+            //if the record is created update the status from request to accepted
+            if(typeof haveResult !== "undefined"){
+              await t
+              .updateTable('friendships')
+              .where('friendships.userId', '=', ctx.session.userId)
+              .where('friendships.friendUserId', '=', input.friendUserId)
+              .where(
+                'friendships.status',
+                '=',
+                FriendshipStatusSchema.Values['requested']
+                )
+                .set({status: FriendshipStatusSchema.Values['accepted']})
+                .executeTakeFirst()
+                
+              }
+              //create new record if the record is undefined
+              else{
+              await t
+              .insertInto('friendships')
+              .values({
+                userId: ctx.session.userId,
+                friendUserId: input.friendUserId,
+                status: FriendshipStatusSchema.Values['accepted'],
+              })
+              .executeTakeFirst()
+            }
+          } catch (error) {
+            console.log(error)
+          }
       })
     }),
 
@@ -124,6 +202,7 @@ export const friendshipRequestRouter = router({
     .use(canAnswerFriendshipRequest)
     .input(AnswerFriendshipRequestInputSchema)
     .mutation(async ({ ctx, input }) => {
+      
       /**
        * Question 2: Implement api to decline a friendship request
        *
@@ -137,5 +216,16 @@ export const friendshipRequestRouter = router({
        * Documentation references:
        *  - https://vitest.dev/api/#test-skip
        */
+      await ctx.db
+          .updateTable('friendships')
+          .where('friendships.userId', '=', input.friendUserId)
+          .where('friendships.friendUserId', '=', ctx.session.userId)
+          .where(
+            'friendships.status',
+            '=',
+            FriendshipStatusSchema.Values['requested']
+            )
+          .set({status: FriendshipStatusSchema.Values['declined']})
+          .executeTakeFirst()
     }),
 })
